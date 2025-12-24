@@ -121,7 +121,8 @@ public class WorkerPool {
         }
         
         idleCheckTask = idleCheckExecutor.scheduleAtFixedRate(() -> {
-            if (executor.getActiveCount() == 0 && executor.getQueue().isEmpty()) {
+            // Check if all submitted tasks have been completed (more atomic than checking active count and queue separately)
+            if (executor.getTaskCount() == executor.getCompletedTaskCount() && executor.getTaskCount() > 0) {
                 long idleTime = unit.toMillis(idleDuration);
                 LOGGER.info(String.format("WorkerPool idle for %d ms, initiating shutdown", idleTime));
                 shutdownGracefully();
@@ -193,7 +194,9 @@ public class WorkerPool {
             if (!executor.awaitTermination(timeout, unit)) {
                 LOGGER.warning("WorkerPool did not terminate in time, forcing shutdown");
                 shutdownNow();
-                return executor.awaitTermination(timeout, unit);
+                // Use a shorter timeout for forced shutdown (half of original)
+                long remainingTimeout = unit.toMillis(timeout) / 2;
+                return executor.awaitTermination(remainingTimeout, TimeUnit.MILLISECONDS);
             }
             LOGGER.info("WorkerPool shutdown completed successfully");
             return true;

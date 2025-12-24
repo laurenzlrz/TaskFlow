@@ -98,6 +98,8 @@ public class ParallelRunBundle {
      * Proceeds with executing all ready tasks until all tasks are complete.
      */
     private void proceedAll() throws ExecutionException, InterruptedException {
+        List<Exception> taskExceptions = new ArrayList<>();
+        
         while (areNodesFree() || areNodesRunning()) {
             // Submit all ready tasks
             for (TaskNode task : tasks) {
@@ -106,17 +108,23 @@ public class ParallelRunBundle {
                 }
             }
             
-            // Check for completed tasks
-            checkCompletedTasks();
+            // Check for completed tasks and collect exceptions
+            checkCompletedTasks(taskExceptions);
             
-            // Small sleep to avoid busy waiting
+            // Wait using a more efficient approach than busy polling
             if (areNodesRunning()) {
-                Thread.sleep(10);
+                // Wait on the futures with a timeout instead of sleeping
+                waitForNextCompletion(50);
             }
         }
         
         // Wait for all remaining tasks to complete
-        waitForAllTasks();
+        waitForAllTasks(taskExceptions);
+        
+        // If there were any exceptions, throw the first one
+        if (!taskExceptions.isEmpty()) {
+            throw new ExecutionException("Task execution failed", taskExceptions.get(0));
+        }
     }
     
     /**
@@ -165,8 +173,9 @@ public class ParallelRunBundle {
     
     /**
      * Checks for completed tasks and removes them from the running tasks map.
+     * Collects exceptions from failed tasks.
      */
-    private void checkCompletedTasks() {
+    private void checkCompletedTasks(List<Exception> taskExceptions) {
         Iterator<Map.Entry<String, Future<?>>> iterator = runningTasks.entrySet().iterator();
         while (iterator.hasNext()) {
             Map.Entry<String, Future<?>> entry = iterator.next();
@@ -176,26 +185,49 @@ public class ParallelRunBundle {
                     // Get result to propagate any exceptions
                     entry.getValue().get();
                 } catch (ExecutionException e) {
-                    LOGGER.severe(String.format("Task execution error: %s", entry.getKey()));
-                    // Exception is already counted in submitTask
+                    LOGGER.severe(String.format("Task execution error: %s - %s", 
+                                               entry.getKey(), e.getCause().getMessage()));
+                    taskExceptions.add(e);
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
                     LOGGER.warning("Interrupted while checking task completion");
+                    taskExceptions.add(e);
                 }
             }
         }
     }
     
     /**
-     * Waits for all running tasks to complete.
+     * Waits for the next task completion with a timeout.
      */
-    private void waitForAllTasks() throws ExecutionException, InterruptedException {
+    private void waitForNextCompletion(long timeoutMs) {
+        try {
+            // Check if any future is done within the timeout
+            long deadline = System.currentTimeMillis() + timeoutMs;
+            while (System.currentTimeMillis() < deadline && areNodesRunning()) {
+                boolean anyDone = runningTasks.values().stream().anyMatch(Future::isDone);
+                if (anyDone) {
+                    break;
+                }
+                Thread.sleep(5);
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+    }
+    
+    /**
+     * Waits for all running tasks to complete.
+     * Collects exceptions from failed tasks.
+     */
+    private void waitForAllTasks(List<Exception> taskExceptions) throws InterruptedException {
         for (Map.Entry<String, Future<?>> entry : runningTasks.entrySet()) {
             try {
                 entry.getValue().get();
             } catch (ExecutionException e) {
-                LOGGER.severe(String.format("Task execution failed: %s", entry.getKey()));
-                throw e;
+                LOGGER.severe(String.format("Task execution failed: %s - %s", 
+                                           entry.getKey(), e.getCause().getMessage()));
+                taskExceptions.add(e);
             }
         }
         runningTasks.clear();
