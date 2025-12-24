@@ -1,6 +1,5 @@
 package com.taskflow.logging;
 
-import java.util.logging.Level;
 import java.util.logging.Logger;
 
 /**
