@@ -2,18 +2,19 @@ package com.taskflow.execution;
 
 import com.taskflow.core.Task;
 import com.taskflow.core.TaskNode;
+import com.taskflow.logging.LogMessages;
+import com.taskflow.logging.TaskFlowLogger;
 
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.logging.Logger;
 
 /**
  * Executes a bundle of tasks in parallel using a WorkerPool.
  * Tasks are executed based on their dependencies (DAG structure).
  */
 public class ParallelRunBundle {
-    private static final Logger LOGGER = Logger.getLogger(ParallelRunBundle.class.getName());
+    private final TaskFlowLogger logger;
     
     private final WorkerPool workerPool;
     private final Set<TaskNode> tasks;
@@ -26,14 +27,25 @@ public class ParallelRunBundle {
      * Creates a ParallelRunBundle with the specified worker pool.
      * 
      * @param workerPool the worker pool to use for execution
+     * @param logger the logger to use for this bundle
      */
-    public ParallelRunBundle(WorkerPool workerPool) {
+    public ParallelRunBundle(WorkerPool workerPool, TaskFlowLogger logger) {
         this.workerPool = workerPool;
-        this.tasks = new HashSet<>();
+        this.logger = logger;
+        this.tasks = ConcurrentHashMap.newKeySet();
         this.runningTasks = new ConcurrentHashMap<>();
         this.completedCount = new AtomicInteger(0);
         this.failedCount = new AtomicInteger(0);
         this.isRunning = false;
+    }
+    
+    /**
+     * Creates a ParallelRunBundle with the specified worker pool and default logger.
+     * 
+     * @param workerPool the worker pool to use for execution
+     */
+    public ParallelRunBundle(WorkerPool workerPool) {
+        this(workerPool, TaskFlowLogger.forClass(ParallelRunBundle.class));
     }
     
     /**
@@ -43,7 +55,7 @@ public class ParallelRunBundle {
      */
     public void addTask(TaskNode task) {
         if (isRunning) {
-            throw new IllegalStateException("Cannot add tasks while bundle is running");
+            throw new IllegalStateException(LogMessages.BUNDLE_CANNOT_ADD_TASKS);
         }
         tasks.add(task);
     }
@@ -55,7 +67,7 @@ public class ParallelRunBundle {
      */
     public void addTasks(Collection<TaskNode> tasks) {
         if (isRunning) {
-            throw new IllegalStateException("Cannot add tasks while bundle is running");
+            throw new IllegalStateException(LogMessages.BUNDLE_CANNOT_ADD_TASKS);
         }
         this.tasks.addAll(tasks);
     }
@@ -70,7 +82,7 @@ public class ParallelRunBundle {
      */
     public ExecutionResult execute() throws ExecutionException, InterruptedException {
         if (isRunning) {
-            throw new IllegalStateException("Bundle is already running");
+            throw new IllegalStateException(LogMessages.BUNDLE_ALREADY_RUNNING);
         }
         
         isRunning = true;
@@ -78,15 +90,14 @@ public class ParallelRunBundle {
         failedCount.set(0);
         runningTasks.clear();
         
-        LOGGER.info(String.format("Starting execution of %d tasks", tasks.size()));
+        logger.info(LogMessages.BUNDLE_STARTING, tasks.size());
         long startTime = System.currentTimeMillis();
         
         try {
             proceedAll();
             
             long duration = System.currentTimeMillis() - startTime;
-            LOGGER.info(String.format("Execution completed: %d succeeded, %d failed, %d ms",
-                                     completedCount.get(), failedCount.get(), duration));
+            logger.info(LogMessages.BUNDLE_COMPLETED, completedCount.get(), failedCount.get(), duration);
             
             return new ExecutionResult(completedCount.get(), failedCount.get(), duration);
         } finally {
@@ -104,7 +115,10 @@ public class ParallelRunBundle {
             // Submit all ready tasks
             for (TaskNode task : tasks) {
                 if (!task.isCompleted() && task.isReady() && !runningTasks.containsKey(task.getId())) {
-                    submitTask(task);
+                    // Use atomic markExecuting to prevent double execution
+                    if (task.markExecuting()) {
+                        submitTask(task);
+                    }
                 }
             }
             
@@ -123,7 +137,7 @@ public class ParallelRunBundle {
         
         // If there were any exceptions, throw the first one
         if (!taskExceptions.isEmpty()) {
-            throw new ExecutionException("Task execution failed", taskExceptions.get(0));
+            throw new ExecutionException(LogMessages.BUNDLE_EXECUTION_FAILED_MESSAGE, taskExceptions.get(0));
         }
     }
     
@@ -152,19 +166,19 @@ public class ParallelRunBundle {
      * @param task the task to submit
      */
     private void submitTask(TaskNode task) {
-        LOGGER.fine(String.format("Submitting task: %s", task.getId()));
+        logger.fine(LogMessages.BUNDLE_SUBMITTING_TASK, task.getId());
         
         Future<?> future = workerPool.submit(() -> {
             try {
-                LOGGER.fine(String.format("Executing task: %s", task.getId()));
+                logger.fine(LogMessages.BUNDLE_EXECUTING_TASK, task.getId());
                 task.execute();
                 task.markCompleted();
                 completedCount.incrementAndGet();
-                LOGGER.fine(String.format("Task completed: %s", task.getId()));
+                logger.fine(LogMessages.BUNDLE_TASK_COMPLETED, task.getId());
             } catch (Exception e) {
                 failedCount.incrementAndGet();
-                LOGGER.severe(String.format("Task failed: %s - %s", task.getId(), e.getMessage()));
-                throw new RuntimeException("Task execution failed: " + task.getId(), e);
+                logger.severe(LogMessages.BUNDLE_TASK_FAILED, task.getId(), e.getMessage());
+                throw new RuntimeException(String.format(LogMessages.BUNDLE_TASK_EXECUTION_FAILED_WRAPPER, task.getId()), e);
             }
         });
         
@@ -185,12 +199,11 @@ public class ParallelRunBundle {
                     // Get result to propagate any exceptions
                     entry.getValue().get();
                 } catch (ExecutionException e) {
-                    LOGGER.severe(String.format("Task execution error: %s - %s", 
-                                               entry.getKey(), e.getCause().getMessage()));
+                    logger.severe(LogMessages.BUNDLE_TASK_EXECUTION_ERROR, entry.getKey(), e.getCause().getMessage());
                     taskExceptions.add(e);
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
-                    LOGGER.warning("Interrupted while checking task completion");
+                    logger.warning(LogMessages.BUNDLE_INTERRUPTED);
                     taskExceptions.add(e);
                 }
             }
@@ -225,8 +238,7 @@ public class ParallelRunBundle {
             try {
                 entry.getValue().get();
             } catch (ExecutionException e) {
-                LOGGER.severe(String.format("Task execution failed: %s - %s", 
-                                           entry.getKey(), e.getCause().getMessage()));
+                logger.severe(LogMessages.BUNDLE_TASK_EXECUTION_FAILED, entry.getKey(), e.getCause().getMessage());
                 taskExceptions.add(e);
             }
         }

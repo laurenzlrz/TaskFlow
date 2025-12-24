@@ -3,19 +3,20 @@ package com.taskflow.orchestration;
 import com.taskflow.core.TaskNode;
 import com.taskflow.execution.ParallelRunBundle;
 import com.taskflow.execution.WorkerPool;
+import com.taskflow.logging.LogMessages;
+import com.taskflow.logging.TaskFlowLogger;
 
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
-import java.util.logging.Logger;
 
 /**
  * Orchestrates the execution of multiple pipeline bundles.
  * Manages the lifecycle of the WorkerPool including automatic shutdown on inactivity.
  */
 public class PipelineOrchestrator {
-    private static final Logger LOGGER = Logger.getLogger(PipelineOrchestrator.class.getName());
+    private final TaskFlowLogger logger;
     
     private final WorkerPool workerPool;
     private final List<ParallelRunBundle> bundles;
@@ -33,12 +34,15 @@ public class PipelineOrchestrator {
      * @param enableAutoShutdown whether to enable automatic shutdown on idle
      * @param idleTimeout timeout before automatic shutdown when idle
      * @param idleTimeoutUnit time unit for idle timeout
+     * @param logger the logger to use for this orchestrator
      */
     public PipelineOrchestrator(int corePoolSize, int maxPoolSize, 
                                long keepAliveTime, TimeUnit keepAliveUnit,
                                boolean enableAutoShutdown, 
-                               long idleTimeout, TimeUnit idleTimeoutUnit) {
-        this.workerPool = new WorkerPool(corePoolSize, maxPoolSize, keepAliveTime, keepAliveUnit);
+                               long idleTimeout, TimeUnit idleTimeoutUnit,
+                               TaskFlowLogger logger) {
+        this.logger = logger;
+        this.workerPool = new WorkerPool(corePoolSize, maxPoolSize, keepAliveTime, keepAliveUnit, logger);
         this.bundles = new ArrayList<>();
         this.autoShutdownEnabled = enableAutoShutdown;
         this.idleTimeout = idleTimeout;
@@ -46,11 +50,22 @@ public class PipelineOrchestrator {
         
         if (autoShutdownEnabled) {
             workerPool.enableAutoShutdownOnIdle(idleTimeout, idleTimeoutUnit);
-            LOGGER.info(String.format("PipelineOrchestrator created with auto-shutdown after %d %s of inactivity",
-                                     idleTimeout, idleTimeoutUnit));
+            logger.info(LogMessages.ORCHESTRATOR_CREATED_WITH_AUTO_SHUTDOWN, idleTimeout, idleTimeoutUnit);
         } else {
-            LOGGER.info("PipelineOrchestrator created without auto-shutdown");
+            logger.info(LogMessages.ORCHESTRATOR_CREATED_WITHOUT_AUTO_SHUTDOWN);
         }
+    }
+    
+    /**
+     * Creates a PipelineOrchestrator with custom WorkerPool configuration and default logger.
+     */
+    public PipelineOrchestrator(int corePoolSize, int maxPoolSize, 
+                               long keepAliveTime, TimeUnit keepAliveUnit,
+                               boolean enableAutoShutdown, 
+                               long idleTimeout, TimeUnit idleTimeoutUnit) {
+        this(corePoolSize, maxPoolSize, keepAliveTime, keepAliveUnit,
+             enableAutoShutdown, idleTimeout, idleTimeoutUnit,
+             TaskFlowLogger.forClass(PipelineOrchestrator.class));
     }
     
     /**
@@ -89,7 +104,7 @@ public class PipelineOrchestrator {
      * @return a new ParallelRunBundle
      */
     public ParallelRunBundle createBundle() {
-        ParallelRunBundle bundle = new ParallelRunBundle(workerPool);
+        ParallelRunBundle bundle = new ParallelRunBundle(workerPool, logger);
         bundles.add(bundle);
         return bundle;
     }
@@ -105,10 +120,10 @@ public class PipelineOrchestrator {
     public ParallelRunBundle.ExecutionResult executeBundle(ParallelRunBundle bundle) 
             throws ExecutionException, InterruptedException {
         if (workerPool.isShutdown()) {
-            throw new IllegalStateException("WorkerPool has been shut down");
+            throw new IllegalStateException(LogMessages.ORCHESTRATOR_WORKER_POOL_SHUTDOWN);
         }
         
-        LOGGER.info(String.format("Executing bundle with %d tasks", bundle.getTaskCount()));
+        logger.info(LogMessages.ORCHESTRATOR_EXECUTING_BUNDLE, bundle.getTaskCount());
         return bundle.execute();
     }
     
@@ -127,7 +142,7 @@ public class PipelineOrchestrator {
             results.add(executeBundle(bundle));
         }
         
-        LOGGER.info(String.format("Completed execution of %d bundles", bundles.size()));
+        logger.info(LogMessages.ORCHESTRATOR_BUNDLES_COMPLETED, bundles.size());
         return results;
     }
     
@@ -138,7 +153,7 @@ public class PipelineOrchestrator {
      * @return true if shutdown completed successfully
      */
     public boolean shutdown() {
-        LOGGER.info("Shutting down PipelineOrchestrator");
+        logger.info(LogMessages.ORCHESTRATOR_SHUTTING_DOWN);
         return workerPool.shutdownGracefully();
     }
     
@@ -150,7 +165,7 @@ public class PipelineOrchestrator {
      * @return true if shutdown completed within timeout
      */
     public boolean shutdown(long timeout, TimeUnit unit) {
-        LOGGER.info(String.format("Shutting down PipelineOrchestrator with %d %s timeout", timeout, unit));
+        logger.info(LogMessages.ORCHESTRATOR_SHUTTING_DOWN_WITH_TIMEOUT, timeout, unit);
         return workerPool.shutdownGracefully(timeout, unit);
     }
     
@@ -160,7 +175,7 @@ public class PipelineOrchestrator {
      * @return list of tasks that never started
      */
     public List<Runnable> shutdownNow() {
-        LOGGER.warning("Force shutting down PipelineOrchestrator");
+        logger.warning(LogMessages.ORCHESTRATOR_FORCE_SHUTDOWN);
         return workerPool.shutdownNow();
     }
     

@@ -1,8 +1,10 @@
 package com.taskflow.execution;
 
+import com.taskflow.logging.LogMessages;
+import com.taskflow.logging.TaskFlowLogger;
+
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.logging.Logger;
 
 /**
  * Manages a pool of worker threads for executing tasks.
@@ -10,7 +12,7 @@ import java.util.logging.Logger;
  * Threads are automatically terminated after being idle for a specified duration.
  */
 public class WorkerPool {
-    private static final Logger LOGGER = Logger.getLogger(WorkerPool.class.getName());
+    private final TaskFlowLogger logger;
     
     private final ThreadPoolExecutor executor;
     private final long keepAliveTime;
@@ -28,10 +30,12 @@ public class WorkerPool {
      *                      this is the maximum time that excess idle threads will wait
      *                      for new tasks before terminating
      * @param unit the time unit for the keepAliveTime argument
+     * @param logger the logger to use for this worker pool
      */
-    public WorkerPool(int corePoolSize, int maxPoolSize, long keepAliveTime, TimeUnit unit) {
+    public WorkerPool(int corePoolSize, int maxPoolSize, long keepAliveTime, TimeUnit unit, TaskFlowLogger logger) {
         this.keepAliveTime = keepAliveTime;
         this.keepAliveTimeUnit = unit;
+        this.logger = logger;
         
         // Create ThreadPoolExecutor with a work queue
         this.executor = new ThreadPoolExecutor(
@@ -63,9 +67,19 @@ public class WorkerPool {
             return t;
         });
         
-        LOGGER.info(String.format("WorkerPool created with %d core threads, %d max threads, " +
-                                 "%d %s keepAliveTime", 
-                                 corePoolSize, maxPoolSize, keepAliveTime, unit));
+        logger.info(LogMessages.WORKER_POOL_CREATED, corePoolSize, maxPoolSize, keepAliveTime, unit);
+    }
+    
+    /**
+     * Creates a WorkerPool with specified configuration and default logger.
+     * 
+     * @param corePoolSize the number of threads to keep in the pool
+     * @param maxPoolSize the maximum number of threads to allow in the pool
+     * @param keepAliveTime thread keep-alive time
+     * @param unit the time unit for the keepAliveTime argument
+     */
+    public WorkerPool(int corePoolSize, int maxPoolSize, long keepAliveTime, TimeUnit unit) {
+        this(corePoolSize, maxPoolSize, keepAliveTime, unit, TaskFlowLogger.forClass(WorkerPool.class));
     }
     
     /**
@@ -89,7 +103,7 @@ public class WorkerPool {
      */
     public Future<?> submit(Runnable task) {
         if (isShutdown.get()) {
-            throw new RejectedExecutionException("WorkerPool has been shut down");
+            throw new RejectedExecutionException(LogMessages.WORKER_POOL_SHUTDOWN_REJECTED);
         }
         return executor.submit(task);
     }
@@ -104,7 +118,7 @@ public class WorkerPool {
      */
     public <T> Future<T> submit(Callable<T> task) {
         if (isShutdown.get()) {
-            throw new RejectedExecutionException("WorkerPool has been shut down");
+            throw new RejectedExecutionException(LogMessages.WORKER_POOL_SHUTDOWN_REJECTED);
         }
         return executor.submit(task);
     }
@@ -124,12 +138,12 @@ public class WorkerPool {
             // Check if all submitted tasks have been completed (more atomic than checking active count and queue separately)
             if (executor.getTaskCount() == executor.getCompletedTaskCount() && executor.getTaskCount() > 0) {
                 long idleTime = unit.toMillis(idleDuration);
-                LOGGER.info(String.format("WorkerPool idle for %d ms, initiating shutdown", idleTime));
+                logger.info(LogMessages.WORKER_POOL_IDLE, idleTime);
                 shutdownGracefully();
             }
         }, idleDuration, idleDuration, unit);
         
-        LOGGER.info(String.format("Auto-shutdown on idle enabled: %d %s", idleDuration, unit));
+        logger.info(LogMessages.AUTO_SHUTDOWN_ENABLED, idleDuration, unit);
     }
     
     /**
@@ -139,7 +153,7 @@ public class WorkerPool {
         if (idleCheckTask != null) {
             idleCheckTask.cancel(false);
             idleCheckTask = null;
-            LOGGER.info("Auto-shutdown on idle disabled");
+            logger.info(LogMessages.AUTO_SHUTDOWN_DISABLED);
         }
     }
     
@@ -149,7 +163,7 @@ public class WorkerPool {
      */
     public void shutdown() {
         if (isShutdown.compareAndSet(false, true)) {
-            LOGGER.info("Shutting down WorkerPool");
+            logger.info(LogMessages.WORKER_POOL_SHUTTING_DOWN);
             disableAutoShutdownOnIdle();
             executor.shutdown();
             idleCheckExecutor.shutdown();
@@ -164,7 +178,7 @@ public class WorkerPool {
      */
     public java.util.List<Runnable> shutdownNow() {
         if (isShutdown.compareAndSet(false, true)) {
-            LOGGER.warning("Forcing immediate shutdown of WorkerPool");
+            logger.warning(LogMessages.WORKER_POOL_FORCE_SHUTDOWN);
             disableAutoShutdownOnIdle();
             idleCheckExecutor.shutdownNow();
             return executor.shutdownNow();
@@ -192,16 +206,16 @@ public class WorkerPool {
         shutdown();
         try {
             if (!executor.awaitTermination(timeout, unit)) {
-                LOGGER.warning("WorkerPool did not terminate in time, forcing shutdown");
+                logger.warning(LogMessages.WORKER_POOL_SHUTDOWN_TIMEOUT);
                 shutdownNow();
                 // Use a shorter timeout for forced shutdown (half of original)
                 long remainingTimeout = unit.toMillis(timeout) / 2;
                 return executor.awaitTermination(remainingTimeout, TimeUnit.MILLISECONDS);
             }
-            LOGGER.info("WorkerPool shutdown completed successfully");
+            logger.info(LogMessages.WORKER_POOL_SHUTDOWN_SUCCESS);
             return true;
         } catch (InterruptedException e) {
-            LOGGER.warning("Shutdown interrupted, forcing immediate shutdown");
+            logger.warning(LogMessages.WORKER_POOL_SHUTDOWN_INTERRUPTED);
             shutdownNow();
             Thread.currentThread().interrupt();
             return false;
