@@ -144,8 +144,8 @@ public class ParallelRunBundle<N extends IPipelineNode, R extends IRepresentatio
         this.proceedOneThreadOneNode(node);
         DebugLog.logThread("proceedOneThreadOneNode finished: " + node);
         
-        // Notify completion and wake up workers if more tasks are available
-        executable.checkOut(node);
+        // Note: proceedOneThreadOneNode already calls representation.notifyFinished(node)
+        // so we don't need to call executable.checkOut(node) here
         
         int availableCount = executable.getAvailableTaskCount();
         if (availableCount > 0) {
