@@ -40,8 +40,8 @@ public class SimplePipelineTest1 {
     void setUp() {
         this.representation = new SimpleRepresentation();
         this.bundleLogger = new BundleLogger<>();
-        this.workerPool = new WorkerPool(4);
-        this.runBundle = new ParallelRunBundle<>(this.representation, this.bundleLogger, this.workerPool);
+        this.workerPool = new WorkerPool();
+        this.runBundle = new ParallelRunBundle<>(this.representation, this.bundleLogger, this.workerPool, 4);
 
         this.callable1 = () -> 1;
         this.callable2 = () -> 2;

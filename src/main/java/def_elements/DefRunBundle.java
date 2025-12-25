@@ -14,8 +14,9 @@ public class DefRunBundle extends ParallelRunBundle<DefPipelineNode, DefRepresen
      * @param representation the representation of the pipeline node.
      * @param logger the logger for the bundle.
      * @param workerPool the worker pool for parallel execution.
+     * @param numWorkers the number of worker threads
      */
-    public DefRunBundle(DefRepresentation representation, DefBundleLogger logger, IWorkerPool workerPool) {
-        super(representation, logger, workerPool);
+    public DefRunBundle(DefRepresentation representation, DefBundleLogger logger, IWorkerPool workerPool, int numWorkers) {
+        super(representation, logger, workerPool, numWorkers);
     }
 }

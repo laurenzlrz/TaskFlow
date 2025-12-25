@@ -1,108 +1,89 @@
 package core.multithreading;
 
-import def_elements.DebugLog;
-
-import java.util.concurrent.Callable;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
+import java.util.concurrent.locks.Condition;
+import java.util.concurrent.locks.ReentrantLock;
 
 /**
- * Class representing a worker pool for executing tasks concurrently.
+ * Implementation of IWorkerPool using ReentrantLock and Condition.
+ * This class provides efficient thread parking and unparking without
+ * busy-waiting or spin-locks.
+ * 
+ * Thread-safe implementation that uses condition variables for 
+ * efficient thread synchronization.
  */
 public class WorkerPool implements IWorkerPool {
-
+    
+    private final ReentrantLock lock;
+    private final Condition condition;
+    private int parkedWorkers;
+    
     /**
-     * The maximum number of lock tries.
+     * Creates a new WorkerPool instance.
      */
-    public static final int MAX_LOCK_TRIES = 1000;
-
-    /**
-     * The executor service for managing worker threads.
-     */
-    protected ExecutorService executorService;
-
-    /**
-     * The number of workers in the pool.
-     */
-    protected int numWorkers;
-
-    /**
-     * The maximum number of lock tries.
-     */
-    protected int maxLockTries;
-
-    /**
-     * Constructs a new WorkerPool with the specified number of workers.
-     *
-     * @param numWorkers the number of workers in the pool
-     */
-    public WorkerPool(int numWorkers) {
-        this.numWorkers = numWorkers;
-        this.executorService = Executors.newFixedThreadPool(this.numWorkers);
-        this.maxLockTries = MAX_LOCK_TRIES;
+    public WorkerPool() {
+        this.lock = new ReentrantLock();
+        this.condition = lock.newCondition();
+        this.parkedWorkers = 0;
     }
-
+    
     /**
-     * Executes the same task for all workers in the pool.
-     *
-     * @param task the task to be executed
+     * Parks (puts to sleep) the calling thread.
+     * The thread will remain parked until it is explicitly unparked
+     * by another thread calling unparkWorkers().
+     * 
+     * This method blocks the calling thread.
      */
     @Override
-    public void doSameTaskForAll(Runnable task) {
-        for (int i = 0; i < this.numWorkers; i++) {
-            this.executorService.submit(task);
+    public void parkWorker() {
+        lock.lock();
+        try {
+            parkedWorkers++;
+            condition.await();
+            parkedWorkers--;
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new RuntimeException("Thread was interrupted while parked", e);
+        } finally {
+            lock.unlock();
         }
-        task.run();
     }
-
+    
     /**
-     * Waits until a specified condition is met, then performs an action.
-     *
-     * @param checkCondition the condition to be checked
-     * @param changeAction the action to be performed when the condition is met
-     * @throws InterruptedException if the current thread is interrupted while waiting
+     * Unparks (wakes up) exactly the specified number of threads.
+     * If fewer than 'count' threads are currently parked, all parked
+     * threads will be awakened.
+     * 
+     * @param count the number of threads to unpark
      */
-    public void waitIfCondition(Callable<Boolean> checkCondition, Runnable changeAction) throws InterruptedException {
-
-        Boolean con;
-        int tries = 0;
-
-        synchronized (this) {
-
-            while (tries < this.maxLockTries) {
-                tries++;
-
-                changeAction.run();
-                try {
-                    con = checkCondition.call();
-                } catch (Exception e) {
-                    throw new RuntimeException(e);
-                }
-
-                if (con) {
-                    DebugLog.logThread("Condition met, waking up, tries: " + tries);
-                    break;
-                }
-                DebugLog.logThread("Going to wait, tries: " + tries);
-                this.wait();
+    @Override
+    public void unparkWorkers(int count) {
+        if (count <= 0) {
+            return;
+        }
+        
+        lock.lock();
+        try {
+            int toUnpark = Math.min(count, parkedWorkers);
+            for (int i = 0; i < toUnpark; i++) {
+                condition.signal();
             }
+        } finally {
+            lock.unlock();
         }
     }
-
+    
     /**
-     * Notifies all workers in the pool.
+     * Returns the number of currently parked workers.
+     * This method is useful for monitoring and testing purposes.
+     * 
+     * @return the number of parked workers
      */
-    public void workerPoolNotifyAll() {
-        synchronized (this) {
-            DebugLog.logThread("Notifying all");
-            this.notifyAll();
-        }
-    }
-
-    public void notifyOne() {
-        synchronized (this) {
-            DebugLog.logThread("Notifying one");
-            this.notify();
+    public int getParkedWorkerCount() {
+        lock.lock();
+        try {
+            return parkedWorkers;
+        } finally {
+            lock.unlock();
         }
     }
 }

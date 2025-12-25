@@ -1,32 +1,27 @@
 package core.multithreading;
 
-import java.util.concurrent.Callable;
-
 /**
- * Interface representing a worker pool for executing tasks concurrently.
+ * Interface for a worker pool that manages thread parking and unparking.
+ * This interface defines a pure parking and signaling mechanism without
+ * any knowledge of bundles, DAGs, or higher-level task orchestration.
  */
 public interface IWorkerPool {
-
+    
     /**
-     * Executes the same task for all workers in the pool.
-     *
-     * @param task the task to be executed
+     * Parks (puts to sleep) the calling thread.
+     * The thread will remain parked until it is explicitly unparked
+     * by another thread calling unparkWorkers().
+     * 
+     * This method blocks the calling thread.
      */
-    void doSameTaskForAll(Runnable task);
-
+    void parkWorker();
+    
     /**
-     * Notifies all workers in the pool.
-     *
-     * @throws InterruptedException if the current thread is interrupted while waiting
+     * Unparks (wakes up) exactly the specified number of threads.
+     * If fewer than 'count' threads are currently parked, all parked
+     * threads will be awakened.
+     * 
+     * @param count the number of threads to unpark
      */
-    void workerPoolNotifyAll() throws InterruptedException;
-
-    /**
-     * Waits until a specified condition is met, then performs an action.
-     *
-     * @param checkCondition the condition to be checked
-     * @param actionCondition the action to be performed when the condition is met
-     * @throws InterruptedException if the current thread is interrupted while waiting
-     */
-    void waitIfCondition(Callable<Boolean> checkCondition, Runnable actionCondition) throws InterruptedException;
+    void unparkWorkers(int count);
 }
